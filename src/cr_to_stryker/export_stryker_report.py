@@ -2,8 +2,10 @@ import enum
 import json
 import os
 import sqlite3
-import sys
 from typing import Any, Dict, Optional
+import argparse
+
+from cr_to_stryker.constants.html_report_template import HTML_PAGE_TEMPLATE
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "mutation_session.sqlite")
 OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "stryker-report.json")
@@ -18,6 +20,8 @@ class TestOutcome(StrEnum):
     SURVIVED = "survived"
     KILLED = "killed"
     INCOMPETENT = "incompetent"
+
+
 
 
 def map_status(test_outcome:str) -> str:
@@ -126,14 +130,48 @@ def getFileContentsFromModulePath(modulePath: str) -> Optional[str]:
             return f.read()
     return None
 
+def composeHtmlReport(json_report: Dict[str, Any]) -> str:
+    # Basic HTML report structure
+    html = HTML_PAGE_TEMPLATE
+    html = html.replace("%JSON_REPORT%", json.dumps(json_report, indent=2))
+    return html 
+
 def main() -> None:
 
-    # get the first argument - this is the sqlite file path
-    if len(sys.argv) < 2:
-        raise SystemExit("Usage: export_stryker_json.py <sqlite_db_path>")
-    DB_PATH = sys.argv[1]
+    parser = argparse.ArgumentParser(
+        description="Convert Cosmic Ray mutation results to Stryker JSON report."
+    )
+    parser.add_argument(
+        "-f", "--format",
+        choices=["html", "json"],
+        default="html",
+        help="Output format for the report."
+    )    
+    parser.add_argument(
+        "-o", "--output",
+        default=os.path.join(os.getcwd(), "stryker-report.html"),
+        help="Path to output Stryker report file."
+    )
+    parser.add_argument(
+        "-w", "--workspace",
+        default=os.getcwd(),
+        help="Workspace root directory for resolving module paths."
+    )    
+    parser.add_argument(
+        "sqlite_db_path",
+        help="Path to the Cosmic Ray mutation session SQLite database."
+    )
 
-    OUTPUT_PATH = sys.argv[2] if len(sys.argv) > 2 else "stryker-report.json"
+    args = parser.parse_args()
+
+
+    OUTPUT_FORMAT = args.format
+    WORKSPACE_PATH = args.workspace
+    DB_PATH = args.sqlite_db_path
+    OUTPUT_PATH = args.output
+
+    if OUTPUT_FORMAT == "json":
+        OUTPUT_PATH = OUTPUT_PATH.replace(".html", ".json")
 
     if not os.path.exists(DB_PATH):
         raise SystemExit(f"Database not found at: {DB_PATH}")
@@ -202,15 +240,22 @@ def main() -> None:
 
         file_entry["mutants"].append(mutant)
 
+
     # Compose top-level Stryker report
-    report: Dict[str, Any] = {
+    json_report: Dict[str, Any] = {
         "schemaVersion": "2.0",
         "thresholds": {"high": 80, "low": 60},
         "files": files_dict,
     }
 
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False)
+    if OUTPUT_FORMAT == "json":
+        with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
+            json.dump(json_report, f, ensure_ascii=False)
+    else:
+        html_report = composeHtmlReport(json_report)
+        with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
+            f.write(html_report)
+
 
     print(f"Wrote Stryker report with {sum(len(f['mutants']) for f in files_dict.values())} mutants "
           f"across {len(files_dict)} files to {OUTPUT_PATH}")
